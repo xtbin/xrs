@@ -16,6 +16,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"sort"
+	"syscall"
 	"time"
 
 	"github.com/BurntSushi/xgbutil"
@@ -109,7 +110,7 @@ func Server(socket string) {
 	)
 	SetStatus(x, Default)
 	log.SetFlags(log.LstdFlags)
-	signal.Notify(sig, os.Interrupt)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		for {
 			c, err := l.Accept()
