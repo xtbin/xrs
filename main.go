@@ -107,6 +107,7 @@ func Server(socket string) {
 		tch   <-chan time.Time
 		sig   = make(chan os.Signal)
 	)
+	SetStatus(x, Default)
 	log.SetFlags(log.LstdFlags)
 	signal.Notify(sig, os.Interrupt)
 	go func() {

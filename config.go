@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+func init() { Default = append(Default, "xrs"...) }
+
 func sendone(ch chan<- Message, msg Message) error {
 	ch <- msg
 	close(ch)
