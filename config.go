@@ -4,19 +4,33 @@
 
 package main
 
-// No reason for this to be longer than 255 bytes -- the protocol won't allow it
-// to be filled with more.
-var Default = make([]byte, 0, 255)
+import (
+	"bufio"
+	"os"
+	"strings"
+)
 
-var Verbs = map[string]Action{
-	"show": {1, 1, func(data [][]byte) ([]byte, error) { return data[0], nil }},
+func sendone(ch chan<- Message, msg Message) error {
+	ch <- msg
+	close(ch)
+	return nil
+}
 
-	"showdef": {0, 0, func([][]byte) ([]byte, error) { return Default, nil }},
-	"setdef": {1, 1,
-		func(data [][]byte) ([]byte, error) {
-			Default = Default[:len(data[0])]
-			copy(Default, data[0])
-			return Default, nil
-		},
+var Actions = map[string]Action{
+	"print": func(ch chan<- Message, args []string) error {
+		return sendone(ch, Message{Data: []byte(strings.Join(args, " "))})
+	},
+
+	"pipe": func(ch chan<- Message, args []string) error {
+		s := bufio.NewScanner(os.Stdin)
+		for s.Scan() {
+			buf := s.Bytes()
+			if len(buf) == 0 {
+				continue
+			}
+			ch <- Message{Data: buf}
+		}
+		close(ch)
+		return s.Err()
 	},
 }

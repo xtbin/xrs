@@ -15,38 +15,72 @@ import (
 	"os/signal"
 	"os/user"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"github.com/BurntSushi/xgbutil"
 	"github.com/BurntSushi/xgbutil/xprop"
 )
 
+type Action func(ch chan<- Message, args []string) error
+
+type Flag uint64
+
+func (f Flag) Is(v Flag) bool { return f&v != 0 }
+
+const (
+	FlagSetDefault Flag = 1 << iota // implies FlagPersist
+	FlagPersist
+)
+
+type Message struct {
+	Data []byte
+	Flag
+}
+
+const MaxMsgSize = 255
+
 var (
+	DataBuf = make([]byte, 2+MaxMsgSize)
+	Default = make([]byte, 0, MaxMsgSize)
+	MsgCh   = make(chan Message)
 	Display string
-	Reset   time.Duration
-	MsgCh   chan []byte
+	DispDur time.Duration
+	LineDur time.Duration
+	CharDur time.Duration
+
+	Serve      bool
+	Persist    bool
+	SetDefault bool
+
+	ErrMsgTooLarge = errors.New("data elements must contain no more than 255 bytes each")
 )
 
 func main() {
-	var (
-		display string
-		serve   bool
-	)
+	log.SetFlags(0)
+
 	flag.StringVar(&Display, "display", os.Getenv("DISPLAY"), "")
-	flag.BoolVar(&serve, "s", false, "run server")
-	flag.DurationVar(&Reset, "r", 10*time.Second, "display duration")
+	flag.BoolVar(&Serve, "s", false, "run server")
+	flag.DurationVar(&DispDur, "t", 10*time.Second, "display duration (server)")
+	flag.BoolVar(&SetDefault, "d", false, "set default message (client)")
+	flag.BoolVar(&Persist, "p", false, "persist message (client)")
+	flag.DurationVar(&LineDur, "l", 5*time.Second/2, "minimum line duration (client pipe)")
+	flag.DurationVar(&CharDur, "c", 70*time.Millisecond, "line duration per character (client pipe)")
 	flag.Parse()
 
 	if Display == "" {
 		log.Fatalln("empty DISPLAY")
 	}
-
 	u, err := user.Current()
 	if err != nil {
 		log.Fatalln("user lookup error:", err)
 	}
-	socket := filepath.Join(os.TempDir(), "xrs."+u.Username, display)
-	if serve {
+	username := u.Username
+	if username == "" {
+		username = u.Uid
+	}
+	socket := filepath.Join(os.TempDir(), "xrs."+username, Display)
+	if Serve {
 		Server(socket)
 	} else {
 		Client(socket)
@@ -68,12 +102,12 @@ func Server(socket string) {
 	}
 	var (
 		timer Timer
+		msg   Message
 		buf   []byte
 		tch   <-chan time.Time
 		sig   = make(chan os.Signal)
-		//quit  = make(chan struct{})
 	)
-	MsgCh = make(chan []byte)
+	log.SetFlags(log.LstdFlags)
 	signal.Notify(sig, os.Interrupt)
 	go func() {
 		for {
@@ -82,33 +116,18 @@ func Server(socket string) {
 				log.Println("connection error:", err)
 				continue
 			}
-			t := time.Now().Add(100 * time.Millisecond)
+			t := time.Now().Add(10 * time.Millisecond)
 			c.SetReadDeadline(t)
-			data, err := Decode(c)
+			msg, err := Decode(c)
 			c.Close()
 			if err != nil {
 				log.Println("decode error:", err)
 				continue
 			}
-			verb, data := data[0], data[1:]
-			action, ok := Verbs[string(verb)]
-			if !ok {
-				log.Printf("unrecognized action %q", verb)
-				continue
-			}
-			if len(data) < action.L || len(data) > action.H {
-				log.Printf("%s takes [%d,%d] arguments", verb, action.L, action.H)
-				continue
-			}
-			out, err := action.F(data)
-			if err != nil {
-				log.Printf("%s execution error: %v", verb, err)
-				continue
-			}
-			MsgCh <- out
+			MsgCh <- msg
 		}
 	}()
-	if Reset == 0 {
+	if DispDur == 0 {
 		timer = NopTimer{}
 	} else {
 		t := time.NewTimer(0)
@@ -124,9 +143,14 @@ loop:
 			break loop
 		case <-tch:
 			buf = Default
-		case buf = <-MsgCh:
-			if &buf[0] != &Default[0] {
-				timer.Reset(Reset)
+		case msg = <-MsgCh:
+			buf = msg.Data
+			if msg.Is(FlagSetDefault) {
+				Default = append(Default[:0], buf...)
+			} else if len(buf) == 0 {
+				buf = Default
+			} else if !msg.Is(FlagPersist) {
+				timer.Reset(DispDur)
 			}
 		}
 		err := SetStatus(x, buf)
@@ -142,80 +166,81 @@ func SetStatus(x *xgbutil.XUtil, b []byte) error {
 
 func Client(socket string) {
 	verb := flag.Arg(0)
-	action, ok := Verbs[verb]
+	if verb == "" || verb == "help" {
+		ListCommands()
+		return
+	}
+	action, ok := Actions[verb]
 	if !ok {
-		log.Fatalf("unrecognized verb %q", verb)
+		log.Fatalf("unrecognized action %q", verb)
 	}
-	n := flag.NArg() - 1
-	if n < action.L || action.H < n {
-		log.Fatalf("%s takes [%d,%d] arguments", verb, action.L, action.H)
+	go func() {
+		err := action(MsgCh, flag.Args()[1:])
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}()
+	var dur time.Duration
+	for msg := range MsgCh {
+		if dur > 0 {
+			time.Sleep(dur)
+		}
+		switch {
+		case SetDefault:
+			msg.Flag |= FlagSetDefault
+			fallthrough
+		case Persist:
+			msg.Flag |= FlagPersist
+		}
+		c, err := net.Dial("unix", socket)
+		if err != nil {
+			log.Fatalln("connection error:", err)
+		}
+		err = Encode(c, msg)
+		c.Close()
+		if err != nil {
+			log.Fatalln("encode error:", err)
+		}
+		dur = CharDur * time.Duration(len(msg.Data))
+		if dur < LineDur {
+			dur = LineDur
+		}
 	}
-	c, err := net.Dial("unix", socket)
-	if err != nil {
-		log.Fatalln("connection error:", err)
-	}
-	err = Encode(c, flag.Args())
-	if err != nil {
-		log.Fatalln("encode error:", err)
-	}
-	c.Close()
 }
 
-const MaxElems = 15 // must not be more than 255
-
-var (
-	ErrTooManyElems = fmt.Errorf("data must contain no more than %d elements", MaxElems)
-	ErrNoElems      = errors.New("data must contain at least one element")
-	ErrElemTooLarge = errors.New("data elements must contain no more than 255 bytes each")
-	ErrBufOverflow  = errors.New("buffer overflow")
-)
-
-var (
-	Buf  = make([]byte, 1+MaxElems*256)
-	Data = make([][]byte, MaxElems)
-)
-
-func Encode(w io.Writer, data []string) error {
-	if len(data) > 15 {
-		return ErrTooManyElems
+func ListCommands() {
+	lst := make([]string, 0, len(Actions))
+	for verb := range Actions {
+		lst = append(lst, verb)
 	}
-	Buf[0] = byte(len(data))
-	i := 1
-	for _, s := range data {
-		if len(s) > 255 {
-			return ErrElemTooLarge
-		}
-		Buf[i] = byte(len(s))
-		copy(Buf[i+1:], s)
-		i += 1 + len(s)
+	sort.Strings(lst)
+	for _, verb := range lst {
+		fmt.Println(verb)
 	}
-	_, err := w.Write(Buf[:i])
+}
+
+func Encode(w io.Writer, msg Message) error {
+	if len(msg.Data) > MaxMsgSize {
+		return ErrMsgTooLarge
+	}
+	buf := DataBuf[:1+len(msg.Data)]
+	buf[0] = byte(msg.Flag)
+	copy(buf[1:], msg.Data)
+	_, err := w.Write(buf)
 	return err
 }
 
-func Decode(r io.Reader) ([][]byte, error) {
-	n, err := io.ReadFull(r, Buf)
-	if err != nil && err != io.ErrUnexpectedEOF {
-		return nil, err
+func Decode(r io.Reader) (msg Message, err error) {
+	n, err := io.ReadFull(r, DataBuf)
+	if err == nil {
+		return msg, ErrMsgTooLarge
+	} else if err != io.ErrUnexpectedEOF {
+		return msg, err
 	}
-	size := int(Buf[0])
-	if size == 0 {
-		return nil, ErrNoElems
-	}
-	if size > MaxElems {
-		return nil, ErrTooManyElems
-	}
-	data := Data[:size]
-	i := 1
-	for idx := range data {
-		j := i + 1 + int(Buf[i])
-		if j > n {
-			return nil, ErrBufOverflow
-		}
-		data[idx] = Buf[i+1 : j]
-		i = j
-	}
-	return data, nil
+	buf := DataBuf[:n]
+	msg.Flag = Flag(buf[0])
+	msg.Data = buf[1:]
+	return msg, nil
 }
 
 type Timer interface {
@@ -228,8 +253,11 @@ type NopTimer struct{}
 func (n NopTimer) Reset(time.Duration) bool { return true }
 func (n NopTimer) Stop() bool               { return true }
 
-type Action struct {
-	L int
-	H int
-	F func([][]byte) ([]byte, error)
+type NumArgsError struct {
+	Name     string
+	Min, Max int
+}
+
+func (e NumArgsError) Error() string {
+	return fmt.Sprint(e.Name, "accepts between", e.Min, "and", e.Max, "arguments")
 }
