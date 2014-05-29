@@ -1,0 +1,41 @@
+xrs is status setter for dwm and other X11 window managers that read status
+messages from the root window's name property. xrs distinguishes itself with
+its focus on responding to specific user requests, rather than presenting a
+self-updating status "dashboard" though xrs can be used for that purpose.
+
+xrs has two kinds of messages: a normal message, which is shown for a limited
+time and then automatically cleared, and a default message, which is displayed
+when no recent messages have been received. Any message can be set as the
+default message. Sending a message will immediately display that message, and
+start/reset the message display timeout. Messages are limited to 255 bytes.
+
+xrs is implemented in Go, and has stable, low resource use: under vanilla 
+conditions, the server component should never generate garbage, and xrs should
+not consume any processor time until a message is received or a message timeout
+occurs.
+
+Installation:
+
+# install or build a Go distribution
+go get github.com/extemporalgenome/xrs
+
+# copy `$GOPATH/bin/xrs` (from the first entry of GOPATH if you have more
+# than one) into your PATH, or ensure that $GOPATH/bin is on your PATH
+
+# put the following line in your ~/.xsession file
+xrs -s &
+
+# configure keypresses to spawn the xrs client. I like a MODKEY+Ctrl mask.
+xrs -d print hello # set default message to "hello"
+date | xrs pipe    # show the current date and time
+dmesg | xrs pipe   # show successive lines from the kernel log
+
+Hacking:
+
+modify config.go to include your own client commands. The existing pipe and
+print commands demonstrate both streaming and one-off uses. If you really want
+to generate messages on the server side, you can just launch a goroutine from
+an init function that just sends Message values to the global MsgCh channel.
+Such init function(s) can still be put in config.go. Server customization
+allows caching and more clever scheduling for blinky-dashboard usages, but will
+also likely make server memory use unstable, albeit completely manageable.
