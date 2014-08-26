@@ -62,9 +62,9 @@ func main() {
 
 	flag.StringVar(&Display, "display", os.Getenv("DISPLAY"), "")
 	flag.BoolVar(&Serve, "s", false, "run server")
-	flag.DurationVar(&DispDur, "t", 10*time.Second, "display duration (server)")
 	flag.BoolVar(&SetDefault, "d", false, "set default message (client)")
 	flag.BoolVar(&Persist, "p", false, "persist message (client)")
+	flag.DurationVar(&DispDur, "t", 10*time.Second, "display duration (server)")
 	flag.DurationVar(&LineDur, "l", 1*time.Second, "minimum line duration (client pipe)")
 	flag.DurationVar(&CharDur, "c", 60*time.Millisecond, "line duration per character (client pipe)")
 	flag.Parse()
