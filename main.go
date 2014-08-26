@@ -101,6 +101,7 @@ func Server(socket string) {
 	if err != nil {
 		log.Fatalln("listen error:", err)
 	}
+	defer l.Close()
 	var (
 		timer Timer
 		msg   Message
@@ -110,7 +111,7 @@ func Server(socket string) {
 	)
 	SetStatus(x, Default)
 	log.SetFlags(log.LstdFlags)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	go func() {
 		for {
 			c, err := l.Accept()
@@ -137,12 +138,10 @@ func Server(socket string) {
 		tch = t.C
 		timer = t
 	}
-loop:
 	for {
 		select {
 		case <-sig:
-			l.Close()
-			break loop
+			return
 		case <-tch:
 			buf = Default
 		case msg = <-MsgCh:
