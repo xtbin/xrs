@@ -89,10 +89,12 @@ func main() {
 }
 
 func Server(socket string) {
-	err := os.Mkdir(filepath.Dir(socket), 0750)
+	dir := filepath.Dir(socket)
+	err := os.Mkdir(dir, 0750)
 	if err != nil && !os.IsExist(err) {
 		log.Fatalln("socket directory creation error:", err)
 	}
+	defer os.Remove(dir)
 	x, err := xgbutil.NewConnDisplay(Display)
 	if err != nil {
 		log.Fatalln("X connection error:", err)
