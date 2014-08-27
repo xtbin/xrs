@@ -16,6 +16,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -96,6 +97,27 @@ func main() {
 }
 
 func Server(socket string) {
+	if flag.NArg() > 0 {
+		args := flag.Args()
+		if !Prefix && !Suffix {
+			sum := len(args) - 1
+			for _, s := range args {
+				sum += len(s)
+			}
+			if sum > MaxMsgSize {
+				log.Fatalln(ErrMsgTooLarge)
+			}
+		}
+		msg := strings.Join(flag.Args(), " ")
+		if len(msg) > MaxMsgSize {
+			if Suffix {
+				msg = msg[len(msg)-MaxMsgSize:]
+			} else {
+				msg = msg[:MaxMsgSize]
+			}
+		}
+		Default = append(Default[:0], msg...)
+	}
 	dir := filepath.Dir(socket)
 	err := os.Mkdir(dir, 0750)
 	if err != nil && !os.IsExist(err) {
