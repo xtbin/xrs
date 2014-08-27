@@ -53,6 +53,8 @@ var (
 	Serve      bool
 	Persist    bool
 	SetDefault bool
+	Prefix     bool // strip input to prefix or suffix;
+	Suffix     bool // default is to consider overflows an error
 
 	ErrMsgTooLarge = errors.New("data elements must contain no more than 255 bytes each")
 )
@@ -64,11 +66,16 @@ func main() {
 	flag.BoolVar(&Serve, "s", false, "run server")
 	flag.BoolVar(&SetDefault, "d", false, "set default message (client)")
 	flag.BoolVar(&Persist, "p", false, "persist message (client)")
+	flag.BoolVar(&Prefix, "P", false, "strip to prefix")
+	flag.BoolVar(&Suffix, "S", false, "strip to suffix")
 	flag.DurationVar(&DispDur, "t", 10*time.Second, "display duration (server)")
 	flag.DurationVar(&LineDur, "l", 1*time.Second, "minimum line duration (client pipe)")
 	flag.DurationVar(&CharDur, "c", 60*time.Millisecond, "line duration per character (client pipe)")
 	flag.Parse()
 
+	if Prefix && Suffix {
+		log.Fatalln("only one of -P or -S may be specified")
+	}
 	if Display == "" {
 		log.Fatalln("empty DISPLAY")
 	}
@@ -185,6 +192,7 @@ func Client(socket string) {
 	}()
 	var dur time.Duration
 	for msg := range MsgCh {
+		var err error
 		if dur > 0 {
 			time.Sleep(dur)
 		}
@@ -194,6 +202,10 @@ func Client(socket string) {
 			fallthrough
 		case Persist:
 			msg.Flag |= FlagPersist
+		}
+		msg.Data, err = PrepareBuf(msg.Data)
+		if err != nil {
+			log.Fatalln(err)
 		}
 		c, err := net.Dial("unix", socket)
 		if err != nil {
@@ -220,6 +232,17 @@ func ListCommands() {
 	for _, verb := range lst {
 		fmt.Println(verb)
 	}
+}
+
+func PrepareBuf(p []byte) ([]byte, error) {
+	if len(p) <= MaxMsgSize {
+		return p, nil
+	} else if Prefix {
+		return p[:MaxMsgSize], nil
+	} else if Suffix {
+		return p[len(p)-MaxMsgSize:], nil
+	}
+	return nil, ErrMsgTooLarge
 }
 
 func Encode(w io.Writer, msg Message) error {
