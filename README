@@ -17,7 +17,7 @@ occurs.
 Installation:
 
 # install or build a Go distribution
-go get github.com/extemporalgenome/xrs
+go get github.com/xtbin/xrs
 
 # copy `$GOPATH/bin/xrs` (from the first entry of GOPATH if you have more
 # than one) into your PATH, or ensure that $GOPATH/bin is on your PATH
